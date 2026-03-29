@@ -10,6 +10,7 @@ from .execution import (
     Q4ExecutionBackend,
     Q4ExecutionRequest,
     Q4ExecutionResponse,
+    SubprocessQ4ExecutionBackend,
 )
 from .models import (
     FailureCategory,
@@ -30,6 +31,7 @@ __all__ = [
     "Q4ExecutionBackend",
     "Q4ExecutionRequest",
     "Q4ExecutionResponse",
+    "SubprocessQ4ExecutionBackend",
     "Q4ArtifactLayout",
     "Q4ArtifactMode",
     "Q4EvaluationPipeline",

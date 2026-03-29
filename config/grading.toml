@@ -22,6 +22,10 @@ split_model_glob = "*_Model.pkl"
 
 [q4]
 timeout_seconds = 60
+use_submission_requirements = true
+requirements_env_root = "sandbox/q4_requirements_envs"
+requirements_install_timeout_seconds = 600
+requirements_reuse_envs = true
 
 [llm]
 enabled = true
@@ -33,12 +37,32 @@ api_key_env_var = "OPENAI_API_KEY"
 timeout_seconds = 60
 temperature = 0.0
 max_repair_attempts = 1
-auto_accept_confidence = 8.5
+
+auto_accept_confidence = 7.8
+
 soft_auto_pass_enabled = true
-soft_auto_pass_min_confidence = 8.0
-soft_auto_pass_min_score_ratio = 0.9
+soft_auto_pass_min_confidence = 7.0
+soft_auto_pass_min_score_ratio = 0.75
 soft_auto_pass_requires_no_failures = true
+
 soft_auto_pass_disallowed_reasons = [
+  "warning_heavy_evidence_packet",
+  "narrative_only_evidence_packet",
+  "score_consistency_issue",
+  "evidence_extraction_failed",
+  "empty_evidence_packet",
+  "question_section_not_found",
+  "no_zip_found",
+  "non_zip_files_present",
+  "judge_evaluation_failed",
+  "config_load_failed",
+  "rubric_load_failed"
+]
+review_rescue_enabled = false
+review_rescue_provider = "openai"
+review_rescue_model = "gpt-5.4-mini"
+review_rescue_min_confidence = 8.5
+review_rescue_disallowed_reasons = [
   "warning_heavy_evidence_packet",
   "narrative_only_evidence_packet",
   "score_consistency_issue",

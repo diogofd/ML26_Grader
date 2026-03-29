@@ -24,6 +24,8 @@ class FailureCategory(StrEnum):
     LOAD_FAILURE = "load_failure"
     IMPORT_FAILURE = "import_failure"
     INFERENCE_FAILURE = "inference_failure"
+    REQUIREMENTS_ENV_CREATION_FAILED = "requirements_env_creation_failed"
+    REQUIREMENTS_INSTALL_FAILED = "requirements_install_failed"
     PREDICTION_COUNT_MISMATCH = "prediction_count_mismatch"
     INVALID_PREDICTIONS = "invalid_predictions"
     EMPTY_PREDICTIONS = "empty_predictions"
@@ -72,9 +74,12 @@ class Q4EvaluationResult(BaseModel):
     input_row_count: int | None = Field(default=None, ge=1)
     prediction_count: int | None = Field(default=None, ge=0)
     predictions_valid: bool = False
+    requirements_env_used: bool = False
     labels_available: bool = False
     f1_score: float | None = Field(default=None, ge=0, le=1)
     rank: int | None = Field(default=None, ge=1)
+    zero_grade_policy_applied: bool = False
+    zero_grade_policy_reason: str | None = None
     failure_category: FailureCategory | None = None
     failure_reason: str | None = None
     execution_logs: list[str] = Field(default_factory=list)
@@ -97,6 +102,12 @@ class Q4EvaluationResult(BaseModel):
             raise ValueError("failure_reason requires failure_category.")
         if self.failure_category is not None and not self.failure_reason:
             raise ValueError("failure_category requires failure_reason.")
+        if self.zero_grade_policy_reason is not None and not self.zero_grade_policy_applied:
+            raise ValueError("zero_grade_policy_reason requires zero_grade_policy_applied.")
+        if self.zero_grade_policy_applied and not self.zero_grade_policy_reason:
+            raise ValueError("zero_grade_policy_applied requires zero_grade_policy_reason.")
+        if self.zero_grade_policy_applied and self.execution_status != Q4ExecutionStatus.FAILED:
+            raise ValueError("zero_grade_policy_applied is only valid for failed Q4 executions.")
         if self.predictions_valid and self.prediction_count is None:
             raise ValueError("Valid predictions require prediction_count.")
         if self.execution_status == Q4ExecutionStatus.SUCCEEDED and self.failure_category is not None:

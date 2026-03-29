@@ -23,6 +23,20 @@ DEFAULT_SOFT_AUTO_PASS_DISALLOWED_REASONS = (
     "judge_evaluation_failed",
     "invalid_judge_output",
 )
+DEFAULT_REVIEW_RESCUE_DISALLOWED_REASONS = (
+    "warning_heavy_evidence_packet",
+    "narrative_only_evidence_packet",
+    "score_consistency_issue",
+    "evidence_extraction_failed",
+    "empty_evidence_packet",
+    "question_section_not_found",
+    "invalid_rubric_spec",
+    "question_spec_missing",
+    "invalid_judge_request",
+    "judge_unavailable",
+    "judge_evaluation_failed",
+    "invalid_judge_output",
+)
 
 
 class PublicDatasetPaths(BaseModel):
@@ -37,6 +51,10 @@ class Q4RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     timeout_seconds: int = Field(default=60, ge=1)
+    use_submission_requirements: bool = False
+    requirements_env_root: Path = Path("sandbox/q4_requirements_envs")
+    requirements_install_timeout_seconds: int = Field(default=600, ge=1)
+    requirements_reuse_envs: bool = True
 
 
 class LLMRuntimeConfig(BaseModel):
@@ -63,6 +81,13 @@ class LLMRuntimeConfig(BaseModel):
     soft_auto_pass_disallowed_reasons: list[str] = Field(
         default_factory=lambda: list(DEFAULT_SOFT_AUTO_PASS_DISALLOWED_REASONS)
     )
+    review_rescue_enabled: bool = False
+    review_rescue_provider: Literal["openai"] | None = None
+    review_rescue_model: str | None = "gpt-5.4"
+    review_rescue_min_confidence: float = Field(default=8.5, ge=0, le=10)
+    review_rescue_disallowed_reasons: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_REVIEW_RESCUE_DISALLOWED_REASONS)
+    )
 
     @model_validator(mode="after")
     def validate_soft_auto_pass_settings(self) -> Self:
@@ -74,6 +99,13 @@ class LLMRuntimeConfig(BaseModel):
             dict.fromkeys(
                 reason
                 for reason in self.soft_auto_pass_disallowed_reasons
+                if reason
+            )
+        )
+        self.review_rescue_disallowed_reasons = list(
+            dict.fromkeys(
+                reason
+                for reason in self.review_rescue_disallowed_reasons
                 if reason
             )
         )

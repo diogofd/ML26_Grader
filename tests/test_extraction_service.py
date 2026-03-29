@@ -535,6 +535,117 @@ def test_prefers_analysis_notebook_over_save_as_pickle_helper_notebook(tmp_path:
     )
 
 
+def test_falls_back_to_nonmatching_analysis_notebook_when_configured_helper_is_unusable(
+    tmp_path: Path,
+) -> None:
+    _write_notebook(
+        tmp_path / "Student_Complaints_Notebook_Helper.ipynb",
+        [
+            nbformat.v4.new_markdown_cell("# Packaging helper"),
+            nbformat.v4.new_markdown_cell(
+                "This helper notebook only reloads serialized artifacts and validates that inference still runs."
+            ),
+            nbformat.v4.new_code_cell(
+                "with open('Student_Pipeline.pkl', 'rb') as handle:\n"
+                "    pipeline = pickle.load(handle)\n"
+                "predictions = pipeline.predict(X_external)\n"
+                "print(predictions[:5])"
+            ),
+        ],
+    )
+    analysis_path = _write_notebook(
+        tmp_path / "Student_Assignment_Analysis.ipynb",
+        [
+            nbformat.v4.new_markdown_cell("# Question 3"),
+            nbformat.v4.new_markdown_cell(
+                "## Q3.1\nF1 score is preferred because false negatives create business and regulatory risk."
+            ),
+            nbformat.v4.new_markdown_cell(
+                "## Q3.2\nRandom Forest is recommended for deployment because it improves recall while keeping precision stable."
+            ),
+            nbformat.v4.new_code_cell(
+                "results = pd.DataFrame({'Model': ['Logistic Regression', 'Random Forest'], 'F1_score': [0.41, 0.45]})"
+            ),
+        ],
+    )
+    extractor = NotebookEvidenceExtractor()
+
+    result = extractor.extract(tmp_path, "Q3")
+
+    assert result.status == ExtractionStatus.READY
+    assert any(
+        note == "Trying fallback notebook candidates for Q3 because configured candidates were unusable."
+        for note in result.notes
+    )
+    assert any(
+        note == f"Selected notebook: {analysis_path.name}"
+        for note in result.notes
+    )
+    assert any(
+        warning.code == "notebook_candidate_rejected_unusable"
+        and "Student_Complaints_Notebook_Helper.ipynb" in warning.message
+        for warning in result.evidence_packet.extraction_warnings
+    )
+    assert any(
+        warning.code == "fallback_notebook_selected"
+        for warning in result.evidence_packet.extraction_warnings
+    )
+    assert not any(
+        warning.code == "configured_notebook_pattern_miss"
+        for warning in result.evidence_packet.extraction_warnings
+    )
+
+
+def test_fallback_candidates_still_fail_closed_when_all_notebooks_are_unusable(tmp_path: Path) -> None:
+    _write_notebook(
+        tmp_path / "Student_Complaints_Notebook_Helper.ipynb",
+        [
+            nbformat.v4.new_markdown_cell("# Packaging helper"),
+            nbformat.v4.new_code_cell("print('artifact reload only')"),
+        ],
+    )
+    _write_notebook(
+        tmp_path / "Student_Assignment_Analysis.ipynb",
+        [
+            nbformat.v4.new_markdown_cell(
+                "This notebook discusses exploratory observations but does not contain Q3 answer structure."
+            ),
+            nbformat.v4.new_code_cell("summary = df.groupby('Product').size()"),
+        ],
+    )
+    extractor = NotebookEvidenceExtractor()
+
+    result = extractor.extract(tmp_path, "Q3")
+
+    assert result.status == ExtractionStatus.FAILED
+    assert result.evidence_packet.has_evidence() is False
+    assert any(
+        note == "Trying fallback notebook candidates for Q3 because configured candidates were unusable."
+        for note in result.notes
+    )
+    assert any(
+        warning.code == "notebook_candidate_rejected_unusable"
+        for warning in result.evidence_packet.extraction_warnings
+    )
+    assert any(
+        warning.code == "empty_evidence_packet"
+        for warning in result.evidence_packet.extraction_warnings
+    )
+
+
+def test_single_notebook_extraction_does_not_emit_fallback_candidate_warnings(tmp_path: Path) -> None:
+    notebook_path = _build_synthetic_notebook(tmp_path / "analysis.ipynb")
+    extractor = NotebookEvidenceExtractor()
+
+    result = extractor.extract(notebook_path, "Q2")
+
+    assert result.status == ExtractionStatus.READY
+    assert all(
+        warning.code not in {"notebook_candidate_rejected_unusable", "fallback_notebook_selected"}
+        for warning in result.evidence_packet.extraction_warnings
+    )
+
+
 def test_configured_notebook_pattern_matches_realistic_submission_name(tmp_path: Path) -> None:
     real_notebook_path = _build_synthetic_notebook(
         tmp_path / "70142_Complaints_Notebook.ipynb.ipynb"

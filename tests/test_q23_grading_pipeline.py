@@ -6,6 +6,7 @@ from typing import Any
 import nbformat
 
 from ml26_grader.config import GradingConfig
+from ml26_grader.llm.interface import JudgeEvaluationAudit
 from ml26_grader.scoring import Q23GradingPipeline
 from ml26_grader.scoring.models import QuestionGradingStatus, QuestionReviewTier
 
@@ -14,13 +15,40 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeJudge:
-    def __init__(self, response_factory) -> None:
+    def __init__(self, response_factory, *, configured_model: str = "fake-first-pass") -> None:
         self._response_factory = response_factory
+        self._configured_model = configured_model
         self.requests = []
+        self.last_evaluation_audit = None
 
     def evaluate(self, request):
         self.requests.append(request)
+        self.last_evaluation_audit = JudgeEvaluationAudit(
+            provider="fake",
+            configured_model=self._configured_model,
+            attempts=1,
+            repair_attempted=False,
+        )
         return self._response_factory(request)
+
+
+class FailingJudge:
+    def __init__(self, message: str, *, configured_model: str = "fake-rescue") -> None:
+        self._message = message
+        self._configured_model = configured_model
+        self.requests = []
+        self.last_evaluation_audit = None
+
+    def evaluate(self, request):
+        self.requests.append(request)
+        self.last_evaluation_audit = JudgeEvaluationAudit(
+            provider="fake",
+            configured_model=self._configured_model,
+            attempts=1,
+            repair_attempted=False,
+            error=self._message,
+        )
+        raise RuntimeError(self._message)
 
 
 def _write_valid_rubrics(path: Path) -> None:
@@ -220,6 +248,7 @@ def _build_judge_payload(
 def _build_pipeline(
     rubrics_path: Path,
     fake_judge: FakeJudge,
+    review_rescue_judge=None,
     **llm_overrides: Any,
 ) -> Q23GradingPipeline:
     config = GradingConfig.from_toml(REPO_ROOT / "config" / "grading.example.toml")
@@ -233,6 +262,7 @@ def _build_pipeline(
         REPO_ROOT / "specs" / "questions.toml",
         rubrics_path,
         judge=fake_judge,
+        review_rescue_judge=review_rescue_judge,
     )
 
 
@@ -262,7 +292,7 @@ def test_routes_low_confidence_results_to_review(tmp_path: Path) -> None:
     rubrics_path = tmp_path / "rubrics.toml"
     _write_valid_rubrics(rubrics_path)
     notebook_path = _build_q2_notebook(tmp_path / "LowConfidenceComplaintsNotebook.ipynb")
-    judge = FakeJudge(lambda request: _build_judge_payload(request, confidence=7.8))
+    judge = FakeJudge(lambda request: _build_judge_payload(request, confidence=7.0))
     pipeline = _build_pipeline(rubrics_path, judge)
 
     result = pipeline.grade_question(notebook_path, "Q2")
@@ -282,7 +312,7 @@ def test_soft_auto_pass_can_score_strong_light_warning_submission(tmp_path: Path
     judge = FakeJudge(
         lambda request: _build_judge_payload(
             request,
-            confidence=8.2,
+            confidence=7.4,
             full_credit=True,
         )
     )
@@ -290,8 +320,9 @@ def test_soft_auto_pass_can_score_strong_light_warning_submission(tmp_path: Path
         rubrics_path,
         judge,
         soft_auto_pass_enabled=True,
-        soft_auto_pass_min_confidence=8.0,
-        soft_auto_pass_min_score_ratio=0.9,
+        auto_accept_confidence=7.8,
+        soft_auto_pass_min_confidence=7.2,
+        soft_auto_pass_min_score_ratio=0.75,
     )
 
     result = pipeline.grade_question(notebook_path, "Q3")
@@ -300,6 +331,7 @@ def test_soft_auto_pass_can_score_strong_light_warning_submission(tmp_path: Path
     assert result.review_tier == QuestionReviewTier.NONE
     assert result.review_required is False
     assert result.soft_auto_pass_applied is True
+    assert result.review_rescue_attempted is False
     assert "question_confidence_below_threshold" in result.soft_review_reasons
     assert "subquestion_anchor_missing" in result.soft_review_reasons
     assert result.review_reasons == []
@@ -312,7 +344,7 @@ def test_disabling_soft_auto_pass_restores_review_for_strong_below_threshold_cas
     judge = FakeJudge(
         lambda request: _build_judge_payload(
             request,
-            confidence=8.2,
+            confidence=7.4,
             full_credit=True,
         )
     )
@@ -320,8 +352,9 @@ def test_disabling_soft_auto_pass_restores_review_for_strong_below_threshold_cas
         rubrics_path,
         judge,
         soft_auto_pass_enabled=False,
-        soft_auto_pass_min_confidence=8.0,
-        soft_auto_pass_min_score_ratio=0.9,
+        auto_accept_confidence=7.8,
+        soft_auto_pass_min_confidence=7.2,
+        soft_auto_pass_min_score_ratio=0.75,
     )
 
     result = pipeline.grade_question(notebook_path, "Q3")
@@ -331,6 +364,139 @@ def test_disabling_soft_auto_pass_restores_review_for_strong_below_threshold_cas
     assert result.review_required is True
     assert result.soft_auto_pass_applied is False
     assert "question_confidence_below_threshold" in result.review_reasons
+
+
+def test_soft_review_case_can_be_rescued_into_scored(tmp_path: Path) -> None:
+    rubrics_path = tmp_path / "rubrics.toml"
+    _write_valid_rubrics(rubrics_path)
+    notebook_path = _build_light_warning_q3_notebook(tmp_path / "RescueQ3Notebook.ipynb")
+    first_pass_judge = FakeJudge(
+        lambda request: _build_judge_payload(
+            request,
+            confidence=7.4,
+            full_credit=True,
+            review_recommended=True,
+            review_reasons=["light extraction ambiguity"],
+        ),
+        configured_model="fake-mini",
+    )
+    rescue_judge = FakeJudge(
+        lambda request: _build_judge_payload(
+            request,
+            confidence=8.8,
+            full_credit=True,
+            review_recommended=False,
+        ),
+        configured_model="fake-strong",
+    )
+    pipeline = _build_pipeline(
+        rubrics_path,
+        first_pass_judge,
+        review_rescue_judge=rescue_judge,
+        soft_auto_pass_enabled=False,
+        review_rescue_enabled=True,
+        review_rescue_min_confidence=8.5,
+    )
+
+    result = pipeline.grade_question(notebook_path, "Q3")
+
+    assert result.status == QuestionGradingStatus.SCORED
+    assert result.review_required is False
+    assert result.review_rescue_attempted is True
+    assert result.review_rescue_changed_status is True
+    assert result.review_rescue_initial_judge_audit is not None
+    assert result.review_rescue_initial_judge_audit.configured_model == "fake-mini"
+    assert result.review_rescue_judge_audit is not None
+    assert result.review_rescue_judge_audit.configured_model == "fake-strong"
+    assert result.judge_audit is not None
+    assert result.judge_audit.configured_model == "fake-strong"
+    assert len(first_pass_judge.requests) == 1
+    assert len(rescue_judge.requests) == 1
+
+
+def test_hard_failure_is_not_eligible_for_review_rescue(tmp_path: Path) -> None:
+    rubrics_path = tmp_path / "rubrics.toml"
+    _write_valid_rubrics(rubrics_path)
+    notebook_path = _build_unusable_notebook(tmp_path / "UnusableComplaintsNotebook.ipynb")
+    judge = FakeJudge(lambda request: _build_judge_payload(request))
+    rescue_judge = FakeJudge(lambda request: _build_judge_payload(request, confidence=9.0))
+    pipeline = _build_pipeline(
+        rubrics_path,
+        judge,
+        review_rescue_judge=rescue_judge,
+        review_rescue_enabled=True,
+        review_rescue_min_confidence=8.5,
+    )
+
+    result = pipeline.grade_question(notebook_path, "Q2")
+
+    assert result.status == QuestionGradingStatus.FAILED
+    assert result.review_rescue_attempted is False
+    assert len(judge.requests) == 0
+    assert len(rescue_judge.requests) == 0
+
+
+def test_rescue_provider_failure_leaves_soft_review_in_review(tmp_path: Path) -> None:
+    rubrics_path = tmp_path / "rubrics.toml"
+    _write_valid_rubrics(rubrics_path)
+    notebook_path = _build_light_warning_q3_notebook(tmp_path / "RescueFailureQ3Notebook.ipynb")
+    first_pass_judge = FakeJudge(
+        lambda request: _build_judge_payload(
+            request,
+            confidence=7.4,
+            full_credit=True,
+            review_recommended=True,
+        )
+    )
+    rescue_judge = FailingJudge("provider unavailable")
+    pipeline = _build_pipeline(
+        rubrics_path,
+        first_pass_judge,
+        review_rescue_judge=rescue_judge,
+        soft_auto_pass_enabled=False,
+        review_rescue_enabled=True,
+        review_rescue_min_confidence=8.5,
+    )
+
+    result = pipeline.grade_question(notebook_path, "Q3")
+
+    assert result.status == QuestionGradingStatus.REVIEW
+    assert result.review_required is True
+    assert result.review_rescue_attempted is True
+    assert result.review_rescue_changed_status is False
+    assert "Judge evaluation failed: provider unavailable" in (result.review_rescue_failure_reason or "")
+    assert len(first_pass_judge.requests) == 1
+    assert len(rescue_judge.requests) == 1
+
+
+def test_disabling_review_rescue_restores_current_review_behavior(tmp_path: Path) -> None:
+    rubrics_path = tmp_path / "rubrics.toml"
+    _write_valid_rubrics(rubrics_path)
+    notebook_path = _build_light_warning_q3_notebook(tmp_path / "NoRescueQ3Notebook.ipynb")
+    first_pass_judge = FakeJudge(
+        lambda request: _build_judge_payload(
+            request,
+            confidence=7.4,
+            full_credit=True,
+            review_recommended=True,
+        )
+    )
+    rescue_judge = FakeJudge(lambda request: _build_judge_payload(request, confidence=9.0, full_credit=True))
+    pipeline = _build_pipeline(
+        rubrics_path,
+        first_pass_judge,
+        review_rescue_judge=rescue_judge,
+        soft_auto_pass_enabled=False,
+        review_rescue_enabled=False,
+        review_rescue_min_confidence=8.5,
+    )
+
+    result = pipeline.grade_question(notebook_path, "Q3")
+
+    assert result.status == QuestionGradingStatus.REVIEW
+    assert result.review_rescue_attempted is False
+    assert len(first_pass_judge.requests) == 1
+    assert len(rescue_judge.requests) == 0
 
 
 def test_routes_warning_heavy_markdown_only_packets_to_review(tmp_path: Path) -> None:

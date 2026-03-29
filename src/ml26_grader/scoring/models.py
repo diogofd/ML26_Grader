@@ -65,6 +65,11 @@ class QuestionGradingResult(BaseModel):
     hard_review_reasons: list[str] = Field(default_factory=list)
     soft_review_reasons: list[str] = Field(default_factory=list)
     soft_auto_pass_applied: bool = False
+    review_rescue_attempted: bool = False
+    review_rescue_changed_status: bool = False
+    review_rescue_failure_reason: str | None = None
+    review_rescue_initial_judge_audit: JudgeEvaluationAudit | None = None
+    review_rescue_judge_audit: JudgeEvaluationAudit | None = None
     failure_reason: str | None = None
     extraction_result: ExtractionResult
     judge_request: JudgeRequest | None = None
@@ -120,6 +125,15 @@ class QuestionGradingResult(BaseModel):
                 raise ValueError("Review grading results cannot include hard review reasons.")
             if self.soft_auto_pass_applied:
                 raise ValueError("Review grading results cannot apply soft auto-pass.")
+        if self.review_rescue_changed_status and not self.review_rescue_attempted:
+            raise ValueError("review_rescue_changed_status requires review_rescue_attempted.")
+        if not self.review_rescue_attempted:
+            if self.review_rescue_failure_reason is not None:
+                raise ValueError("review_rescue_failure_reason requires review_rescue_attempted.")
+            if self.review_rescue_initial_judge_audit is not None:
+                raise ValueError("review_rescue_initial_judge_audit requires review_rescue_attempted.")
+            if self.review_rescue_judge_audit is not None:
+                raise ValueError("review_rescue_judge_audit requires review_rescue_attempted.")
         return self
 
 

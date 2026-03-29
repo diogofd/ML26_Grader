@@ -63,13 +63,24 @@ def test_grading_config_loads_llm_runtime_settings() -> None:
     assert config.q3_max_points == 4.0
     assert config.llm.enabled is False
     assert config.llm.fail_closed is True
-    assert config.llm.auto_accept_confidence == pytest.approx(8.5)
-    assert config.llm.soft_auto_pass_enabled is False
-    assert config.llm.soft_auto_pass_min_confidence == pytest.approx(8.0)
-    assert config.llm.soft_auto_pass_min_score_ratio == pytest.approx(0.9)
+    assert config.llm.auto_accept_confidence == pytest.approx(7.8)
+    assert config.llm.soft_auto_pass_enabled is True
+    assert config.llm.soft_auto_pass_min_confidence == pytest.approx(7.2)
+    assert config.llm.soft_auto_pass_min_score_ratio == pytest.approx(0.75)
     assert config.llm.soft_auto_pass_requires_no_failures is True
     assert "warning_heavy_evidence_packet" in config.llm.soft_auto_pass_disallowed_reasons
     assert "evidence_extraction_failed" in config.llm.soft_auto_pass_disallowed_reasons
+    assert config.llm.review_rescue_enabled is False
+    assert config.llm.review_rescue_provider == "openai"
+    assert config.llm.review_rescue_model == "gpt-5.4-mini"
+    assert config.llm.review_rescue_min_confidence == pytest.approx(8.5)
+    assert "warning_heavy_evidence_packet" in config.llm.review_rescue_disallowed_reasons
+    assert "invalid_judge_output" in config.llm.review_rescue_disallowed_reasons
+    assert config.q4.timeout_seconds == 60
+    assert config.q4.use_submission_requirements is False
+    assert config.q4.requirements_env_root == Path("sandbox/q4_requirements_envs")
+    assert config.q4.requirements_install_timeout_seconds == 600
+    assert config.q4.requirements_reuse_envs is True
 
 
 def test_load_llm_question_specs_combines_questions_rubrics_and_scores(tmp_path: Path) -> None:

@@ -100,6 +100,10 @@ The system must:
 - compute F1 score,
 - and generate a leaderboard rank.
 
+If the Q4 submission is non-functional, Q4 is a zero by explicit course policy.
+This includes missing required artifacts, artifact import/load failures, inference failures, empty predictions, prediction-count mismatches, and invalid prediction formats.
+The result must still fail closed deterministically and record that the zero was policy-driven.
+
 At this stage, Q4 produces:
 - `f1_score`
 - `rank`
@@ -210,6 +214,7 @@ The system must store:
 - `rank`
 - `leaderboard_status`
 - execution status
+- whether a zero-grade policy outcome was applied
 - failure reason if applicable
 
 ## Failed-run policy for Q4
@@ -217,6 +222,7 @@ The system must store:
 A Q4 run is considered failed if any of the following occurs:
 
 - required execution artifacts are missing
+- any missing required Q4 artifact, including `requirements.txt`, notebook, required pickle artifact(s), or required `feature_engineering.py`; these are explicit zero-grade policy outcomes for Q4
 - the model or pipeline cannot be loaded
 - required modules cannot be imported
 - inference crashes
@@ -230,6 +236,8 @@ A failed run must be recorded with:
 - failure category
 - failure message
 - execution logs if available
+
+If the failure was caused by a non-functional submission outcome, the recorded output must also make clear that the zero came from explicit course policy rather than an execution crash.
 
 ## Student-facing feedback policy
 

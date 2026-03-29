@@ -79,12 +79,16 @@ class Q23GradingPipeline:
         *,
         extractor: EvidenceExtractor | None = None,
         judge: LLMJudge | None = None,
+        review_rescue_judge: LLMJudge | None = None,
         spec_load_error: str | None = None,
     ) -> None:
         self._grading_config = grading_config
         self._question_specs = dict(question_specs or {})
         self._extractor = extractor or NotebookEvidenceExtractor(grading_config.submission)
         self._judge = judge or self._build_configured_judge(grading_config)
+        self._review_rescue_judge = (
+            review_rescue_judge or self._build_review_rescue_judge(grading_config)
+        )
         self._spec_load_error = spec_load_error
 
     @classmethod
@@ -96,6 +100,7 @@ class Q23GradingPipeline:
         *,
         extractor: EvidenceExtractor | None = None,
         judge: LLMJudge | None = None,
+        review_rescue_judge: LLMJudge | None = None,
     ) -> "Q23GradingPipeline":
         try:
             question_specs = load_llm_question_specs(
@@ -109,6 +114,7 @@ class Q23GradingPipeline:
                 question_specs={},
                 extractor=extractor,
                 judge=judge,
+                review_rescue_judge=review_rescue_judge,
                 spec_load_error=str(exc),
             )
 
@@ -117,6 +123,7 @@ class Q23GradingPipeline:
             question_specs=question_specs,
             extractor=extractor,
             judge=judge,
+            review_rescue_judge=review_rescue_judge,
         )
 
     def grade_question(
@@ -186,35 +193,15 @@ class Q23GradingPipeline:
                 judge_request=judge_request,
             )
 
-        try:
-            raw_result = self._judge.evaluate(judge_request)
-        except Exception as exc:
-            return self._failed_result(
-                extraction_result,
-                "judge_evaluation_failed",
-                f"Judge evaluation failed: {exc}",
-                judge_request=judge_request,
-                judge_audit=self._current_judge_audit(),
-            )
-
-        try:
-            judge_result = (
-                raw_result
-                if isinstance(raw_result, JudgeQuestionResult)
-                else JudgeQuestionResult.model_validate(raw_result)
-            )
-        except ValidationError as exc:
-            return self._failed_result(
-                extraction_result,
-                "invalid_judge_output",
-                f"Judge output failed schema validation: {exc}",
-                judge_request=judge_request,
-                judge_audit=self._current_judge_audit(),
-            )
-
-        score_summary = summarise_question_result(
-            judge_result,
+        first_pass = self._evaluate_judge_pass(
+            self._judge,
+            judge_request,
+            extraction_result,
         )
+        if isinstance(first_pass, QuestionGradingResult):
+            return first_pass
+
+        judge_result, score_summary, judge_audit = first_pass
         policy = self._assess_review_policy(
             extraction_result,
             judge_result,
@@ -242,11 +229,71 @@ class Q23GradingPipeline:
                 failure_reason,
                 judge_request=judge_request,
                 judge_result=judge_result,
-                judge_audit=self._current_judge_audit(),
+                judge_audit=judge_audit,
                 score_summary=merged_summary or score_summary,
                 hard_review_reasons=policy.hard_review_reasons,
                 soft_review_reasons=policy.soft_review_reasons,
             )
+
+        review_rescue_attempted = False
+        review_rescue_changed_status = False
+        review_rescue_failure_reason: str | None = None
+        review_rescue_initial_judge_audit: JudgeEvaluationAudit | None = None
+        review_rescue_judge_audit: JudgeEvaluationAudit | None = None
+
+        if self._is_review_rescue_eligible(extraction_result, policy):
+            review_rescue_attempted = True
+            review_rescue_initial_judge_audit = judge_audit
+            rescue_pass = self._evaluate_judge_pass(
+                self._review_rescue_judge,
+                judge_request,
+                extraction_result,
+                unavailable_reason_code="judge_unavailable",
+                unavailable_reason_message="No review-rescue judge implementation was provided.",
+            )
+            if isinstance(rescue_pass, QuestionGradingResult):
+                review_rescue_judge_audit = rescue_pass.judge_audit
+                review_rescue_failure_reason = rescue_pass.failure_reason
+            else:
+                rescue_judge_result, rescue_score_summary, rescue_judge_audit = rescue_pass
+                review_rescue_judge_audit = rescue_judge_audit
+                rescue_policy = self._assess_review_policy(
+                    extraction_result,
+                    rescue_judge_result,
+                    rescue_score_summary,
+                )
+                if self._can_review_rescue_auto_pass(
+                    rescue_judge_result,
+                    rescue_policy,
+                ):
+                    judge_result = rescue_judge_result
+                    judge_audit = rescue_judge_audit
+                    score_summary = rescue_score_summary
+                    policy = _ReviewPolicyAssessment(
+                        status=QuestionGradingStatus.SCORED,
+                        review_tier=QuestionReviewTier.NONE,
+                        review_required=False,
+                        hard_review_reasons=[],
+                        soft_review_reasons=rescue_policy.soft_review_reasons,
+                        final_review_reasons=[],
+                        soft_auto_pass_applied=False,
+                    )
+                    merged_summary = score_summary.model_copy(
+                        update={
+                            "review_required": False,
+                            "review_reasons": [],
+                            "provisional": False,
+                        }
+                    )
+                    review_rescue_changed_status = True
+                elif rescue_policy.status == QuestionGradingStatus.FAILED:
+                    review_rescue_failure_reason = (
+                        "Review rescue produced hard-blocking issues and was not accepted."
+                    )
+                else:
+                    review_rescue_failure_reason = (
+                        "Review rescue did not meet the configured confidence and reason gates."
+                    )
 
         return QuestionGradingResult(
             question_id=question_id,
@@ -257,10 +304,15 @@ class Q23GradingPipeline:
             hard_review_reasons=policy.hard_review_reasons,
             soft_review_reasons=policy.soft_review_reasons,
             soft_auto_pass_applied=policy.soft_auto_pass_applied,
+            review_rescue_attempted=review_rescue_attempted,
+            review_rescue_changed_status=review_rescue_changed_status,
+            review_rescue_failure_reason=review_rescue_failure_reason,
+            review_rescue_initial_judge_audit=review_rescue_initial_judge_audit,
+            review_rescue_judge_audit=review_rescue_judge_audit,
             extraction_result=extraction_result,
             judge_request=judge_request,
             judge_result=judge_result,
-            judge_audit=self._current_judge_audit(),
+            judge_audit=judge_audit,
             score_summary=merged_summary,
         )
 
@@ -497,10 +549,28 @@ class Q23GradingPipeline:
         except Exception:
             return None
 
-    def _current_judge_audit(self) -> JudgeEvaluationAudit | None:
-        if self._judge is None:
+    def _build_review_rescue_judge(
+        self,
+        grading_config: GradingConfig,
+    ) -> LLMJudge | None:
+        llm_config = grading_config.llm
+        if not llm_config.enabled or not llm_config.review_rescue_enabled:
             return None
-        audit = getattr(self._judge, "last_evaluation_audit", None)
+        rescue_llm_config = llm_config.model_copy(
+            update={
+                "provider": llm_config.review_rescue_provider or llm_config.provider,
+                "model": llm_config.review_rescue_model or llm_config.model,
+            }
+        )
+        try:
+            return build_llm_judge(grading_config, llm_config=rescue_llm_config)
+        except Exception:
+            return None
+
+    def _current_judge_audit(self, judge: LLMJudge | None) -> JudgeEvaluationAudit | None:
+        if judge is None:
+            return None
+        audit = getattr(judge, "last_evaluation_audit", None)
         if audit is None:
             return None
         if isinstance(audit, JudgeEvaluationAudit):
@@ -509,6 +579,91 @@ class Q23GradingPipeline:
             return JudgeEvaluationAudit.model_validate(audit)
         except ValidationError:
             return None
+
+    def _evaluate_judge_pass(
+        self,
+        judge: LLMJudge | None,
+        judge_request: JudgeRequest,
+        extraction_result: ExtractionResult,
+        *,
+        unavailable_reason_code: str = "judge_unavailable",
+        unavailable_reason_message: str = "No LLM judge implementation was provided.",
+    ) -> (
+        tuple[JudgeQuestionResult, QuestionScoreSummary, JudgeEvaluationAudit | None]
+        | QuestionGradingResult
+    ):
+        if judge is None:
+            return self._failed_result(
+                extraction_result,
+                unavailable_reason_code,
+                unavailable_reason_message,
+                judge_request=judge_request,
+            )
+
+        try:
+            raw_result = judge.evaluate(judge_request)
+        except Exception as exc:
+            return self._failed_result(
+                extraction_result,
+                "judge_evaluation_failed",
+                f"Judge evaluation failed: {exc}",
+                judge_request=judge_request,
+                judge_audit=self._current_judge_audit(judge),
+            )
+
+        try:
+            judge_result = (
+                raw_result
+                if isinstance(raw_result, JudgeQuestionResult)
+                else JudgeQuestionResult.model_validate(raw_result)
+            )
+        except ValidationError as exc:
+            return self._failed_result(
+                extraction_result,
+                "invalid_judge_output",
+                f"Judge output failed schema validation: {exc}",
+                judge_request=judge_request,
+                judge_audit=self._current_judge_audit(judge),
+            )
+
+        return (
+            judge_result,
+            summarise_question_result(judge_result),
+            self._current_judge_audit(judge),
+        )
+
+    def _is_review_rescue_eligible(
+        self,
+        extraction_result: ExtractionResult,
+        policy: _ReviewPolicyAssessment,
+    ) -> bool:
+        if not self._grading_config.llm.review_rescue_enabled:
+            return False
+        if self._review_rescue_judge is None:
+            return False
+        if policy.status != QuestionGradingStatus.REVIEW:
+            return False
+        if policy.hard_review_reasons:
+            return False
+        if extraction_result.status != ExtractionStatus.READY:
+            return False
+        if not extraction_result.evidence_packet.has_evidence():
+            return False
+        if "score_consistency_issue" in policy.final_review_reasons:
+            return False
+        return all(reason in policy.soft_review_reasons for reason in policy.final_review_reasons)
+
+    def _can_review_rescue_auto_pass(
+        self,
+        judge_result: JudgeQuestionResult,
+        policy: _ReviewPolicyAssessment,
+    ) -> bool:
+        if policy.hard_review_reasons:
+            return False
+        if judge_result.confidence < self._grading_config.llm.review_rescue_min_confidence:
+            return False
+        disallowed_reason_codes = set(self._grading_config.llm.review_rescue_disallowed_reasons)
+        return not any(reason in disallowed_reason_codes for reason in policy.soft_review_reasons)
 
 
 def _dedupe_reason_codes(reason_codes: list[str]) -> list[str]:

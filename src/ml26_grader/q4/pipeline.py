@@ -21,6 +21,7 @@ from .execution import (
     DisabledQ4ExecutionBackend,
     Q4ExecutionBackend,
     Q4ExecutionRequest,
+    SubprocessQ4ExecutionBackend,
 )
 from .models import (
     FailureCategory,
@@ -32,6 +33,9 @@ from .models import (
 )
 
 LABEL_COLUMN = "Consumer disputed?"
+ZERO_GRADE_POLICY_MESSAGE = (
+    "Q4 is zero by policy because the submission did not successfully produce valid binary predictions."
+)
 FEATURE_ENGINEERING_PATTERNS = (
     re.compile(r"from\s+feature_engineering\s+import\s+feature_engineering", re.IGNORECASE),
     re.compile(r"\bfeature_engineering\s*\(", re.IGNORECASE),
@@ -70,27 +74,38 @@ class Q4EvaluationPipeline:
         base_dir: Path = Path("."),
         execution_backend: Q4ExecutionBackend | None = None,
     ) -> "Q4EvaluationPipeline":
+        resolved_base_dir = base_dir.resolve()
         return cls(
             patterns=grading_config.submission,
             dataset_manifests={
                 "training": DatasetManifest(
                     name="training",
-                    path=base_dir / grading_config.public_datasets.training,
+                    path=(resolved_base_dir / grading_config.public_datasets.training).resolve(),
                     includes_label=True,
                 ),
                 "test": DatasetManifest(
                     name="test",
-                    path=base_dir / grading_config.public_datasets.test,
+                    path=(resolved_base_dir / grading_config.public_datasets.test).resolve(),
                     includes_label=True,
                 ),
                 "modeltesting": DatasetManifest(
                     name="modeltesting",
-                    path=base_dir / grading_config.public_datasets.modeltesting,
+                    path=(resolved_base_dir / grading_config.public_datasets.modeltesting).resolve(),
                     includes_label=True,
                 ),
             },
             timeout_seconds=grading_config.q4.timeout_seconds,
-            execution_backend=execution_backend,
+            execution_backend=execution_backend
+            or SubprocessQ4ExecutionBackend(
+                use_submission_requirements=grading_config.q4.use_submission_requirements,
+                requirements_env_root=(
+                    resolved_base_dir / grading_config.q4.requirements_env_root
+                ).resolve(),
+                requirements_install_timeout_seconds=(
+                    grading_config.q4.requirements_install_timeout_seconds
+                ),
+                requirements_reuse_envs=grading_config.q4.requirements_reuse_envs,
+            ),
         )
 
     def inspect_artifacts(self, submission_root: Path) -> Q4ArtifactLayout:
@@ -172,6 +187,7 @@ class Q4EvaluationPipeline:
                 leaderboard_status=LeaderboardStatus.FAILED,
                 failure_category=FailureCategory.MISSING_ARTIFACTS,
                 failure_reason=str(exc),
+                apply_zero_grade_policy=False,
             )
 
         if artifact_layout.missing_artifacts:
@@ -199,6 +215,8 @@ class Q4EvaluationPipeline:
                 leaderboard_status=LeaderboardStatus.FAILED,
                 failure_category=FailureCategory.LOAD_FAILURE,
                 failure_reason=f"Dataset inspection failed: {exc}",
+                apply_zero_grade_policy=False,
+                requirements_env_used=False,
             )
 
         execution_request = Q4ExecutionRequest(
@@ -223,27 +241,33 @@ class Q4EvaluationPipeline:
                 failure_category=FailureCategory.INFERENCE_FAILURE,
                 failure_reason=f"Q4 execution backend failed: {exc}",
                 execution_logs=list(dataset_inspection.notes),
+                requirements_env_used=False,
             )
         execution_logs = [*dataset_inspection.notes, *execution_response.execution_logs]
 
         if execution_response.execution_status != Q4ExecutionStatus.SUCCEEDED:
-            return Q4EvaluationResult(
+            return self._failure_result(
+                artifact_layout=artifact_layout,
                 execution_status=execution_response.execution_status,
                 leaderboard_status=(
                     LeaderboardStatus.FAILED
                     if execution_response.execution_status == Q4ExecutionStatus.FAILED
                     else LeaderboardStatus.NOT_RUN
                 ),
-                artifact_layout=artifact_layout,
                 dataset_name=dataset_inspection.manifest.name,
                 dataset_path=dataset_inspection.manifest.path,
                 input_row_count=dataset_inspection.row_count,
                 prediction_count=len(execution_response.predictions),
-                predictions_valid=False,
                 labels_available=dataset_inspection.labels is not None,
-                failure_category=execution_response.failure_category,
-                failure_reason=execution_response.failure_reason,
+                failure_category=execution_response.failure_category
+                or FailureCategory.INFERENCE_FAILURE,
+                failure_reason=execution_response.failure_reason
+                or "Q4 execution failed without a structured failure reason.",
                 execution_logs=execution_logs,
+                apply_zero_grade_policy=(
+                    execution_response.execution_status == Q4ExecutionStatus.FAILED
+                ),
+                requirements_env_used=execution_response.requirements_env_used,
             )
 
         if not execution_response.predictions:
@@ -259,6 +283,7 @@ class Q4EvaluationPipeline:
                 failure_category=FailureCategory.EMPTY_PREDICTIONS,
                 failure_reason="Prediction output is empty.",
                 execution_logs=execution_logs,
+                requirements_env_used=execution_response.requirements_env_used,
             )
 
         try:
@@ -276,6 +301,7 @@ class Q4EvaluationPipeline:
                 failure_category=FailureCategory.INVALID_PREDICTIONS,
                 failure_reason=str(exc),
                 execution_logs=execution_logs,
+                requirements_env_used=execution_response.requirements_env_used,
             )
 
         try:
@@ -293,6 +319,7 @@ class Q4EvaluationPipeline:
                 failure_category=FailureCategory.PREDICTION_COUNT_MISMATCH,
                 failure_reason=str(exc),
                 execution_logs=execution_logs,
+                requirements_env_used=execution_response.requirements_env_used,
             )
 
         f1_score: float | None = None
@@ -321,8 +348,11 @@ class Q4EvaluationPipeline:
             input_row_count=dataset_inspection.row_count,
             prediction_count=len(normalized_predictions),
             predictions_valid=True,
+            requirements_env_used=execution_response.requirements_env_used,
             labels_available=labels_available,
             f1_score=f1_score,
+            zero_grade_policy_applied=False,
+            zero_grade_policy_reason=None,
             execution_logs=execution_logs,
         )
 
@@ -340,35 +370,44 @@ class Q4EvaluationPipeline:
         except KeyError as exc:
             raise KeyError(f"Unsupported Q4 dataset: {dataset_name}") from exc
 
+        resolved_manifest = manifest.model_copy(update={"path": manifest.path.resolve()})
+
         row_count = 0
-        labels: list[int] | None = [] if manifest.includes_label else None
+        labels: list[int] | None = [] if resolved_manifest.includes_label else None
         invalid_label_found = False
 
-        with manifest.path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames is None:
-                raise ValueError(f"{manifest.path} does not contain a valid CSV header.")
-            label_column_present = LABEL_COLUMN in reader.fieldnames
-            if labels is not None and not label_column_present:
-                labels = None
-            for row in reader:
-                row_count += 1
-                if labels is None or not label_column_present or invalid_label_found:
-                    continue
-                try:
-                    labels.append(normalize_binary_label(row.get(LABEL_COLUMN, "")))
-                except ValueError:
-                    invalid_label_found = True
+        try:
+            with resolved_manifest.path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                if reader.fieldnames is None:
+                    raise ValueError(
+                        f"{resolved_manifest.path} does not contain a valid CSV header."
+                    )
+                label_column_present = LABEL_COLUMN in reader.fieldnames
+                if labels is not None and not label_column_present:
                     labels = None
+                for row in reader:
+                    row_count += 1
+                    if labels is None or not label_column_present or invalid_label_found:
+                        continue
+                    try:
+                        labels.append(normalize_binary_label(row.get(LABEL_COLUMN, "")))
+                    except ValueError:
+                        invalid_label_found = True
+                        labels = None
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"Dataset file not found at {resolved_manifest.path}"
+            ) from exc
 
         if row_count < 1:
-            raise ValueError(f"{manifest.path} contains no input rows.")
+            raise ValueError(f"{resolved_manifest.path} contains no input rows.")
 
         notes = [
-            f"Loaded dataset {manifest.name} from {manifest.path}.",
+            f"Loaded dataset {resolved_manifest.name} from {resolved_manifest.path}.",
             f"Dataset row count: {row_count}.",
         ]
-        if manifest.includes_label:
+        if resolved_manifest.includes_label:
             if labels is None:
                 notes.append(
                     "Label column was unavailable or not fully binary, so F1 scoring is disabled for this run."
@@ -377,7 +416,7 @@ class Q4EvaluationPipeline:
                 notes.append(f"Loaded {len(labels)} binary labels for F1 scoring.")
 
         return _DatasetInspection(
-            manifest=manifest,
+            manifest=resolved_manifest,
             row_count=row_count,
             labels=labels,
             notes=notes,
@@ -396,8 +435,36 @@ class Q4EvaluationPipeline:
         input_row_count: int | None = None,
         prediction_count: int | None = None,
         labels_available: bool = False,
+        apply_zero_grade_policy: bool | None = None,
+        zero_grade_policy_applied: bool | None = None,
+        zero_grade_policy_reason: str | None = None,
         execution_logs: list[str] | None = None,
+        requirements_env_used: bool = False,
     ) -> Q4EvaluationResult:
+        computed_zero_grade_reason = zero_grade_policy_reason
+        computed_zero_grade_applied = zero_grade_policy_applied
+        if apply_zero_grade_policy is None:
+            apply_zero_grade_policy = execution_status == Q4ExecutionStatus.FAILED
+        if computed_zero_grade_applied is None:
+            computed_zero_grade_applied = apply_zero_grade_policy
+        if computed_zero_grade_applied and computed_zero_grade_reason is None:
+            computed_zero_grade_reason = self._zero_grade_policy_reason(
+                artifact_layout=artifact_layout,
+                execution_status=execution_status,
+                failure_category=failure_category,
+                requirements_env_used=requirements_env_used,
+            )
+            if computed_zero_grade_reason is None:
+                computed_zero_grade_applied = False
+
+        logs = list(execution_logs or [])
+        if computed_zero_grade_applied and computed_zero_grade_reason is not None:
+            logs.append(
+                f"{ZERO_GRADE_POLICY_MESSAGE} Reason: {computed_zero_grade_reason}."
+            )
+            if failure_reason:
+                failure_reason = f"{failure_reason}. {ZERO_GRADE_POLICY_MESSAGE}"
+
         return Q4EvaluationResult(
             execution_status=execution_status,
             leaderboard_status=leaderboard_status,
@@ -407,11 +474,59 @@ class Q4EvaluationPipeline:
             input_row_count=input_row_count,
             prediction_count=prediction_count,
             predictions_valid=False,
+            requirements_env_used=requirements_env_used,
             labels_available=labels_available,
+            zero_grade_policy_applied=computed_zero_grade_applied,
+            zero_grade_policy_reason=computed_zero_grade_reason,
             failure_category=failure_category,
             failure_reason=failure_reason,
-            execution_logs=list(execution_logs or []),
+            execution_logs=logs,
         )
+
+    def _zero_grade_policy_reason(
+        self,
+        *,
+        artifact_layout: Q4ArtifactLayout,
+        execution_status: Q4ExecutionStatus,
+        failure_category: FailureCategory,
+        requirements_env_used: bool = False,
+    ) -> str | None:
+        if execution_status != Q4ExecutionStatus.FAILED:
+            return None
+
+        if failure_category == FailureCategory.MISSING_ARTIFACTS:
+            missing_artifacts = set(artifact_layout.missing_artifacts)
+            if "requirements_file" in missing_artifacts:
+                return "missing_requirements_file"
+            if "notebook" in missing_artifacts:
+                return "missing_notebook"
+            if "feature_engineering_file" in missing_artifacts:
+                return "missing_feature_engineering_file"
+            if {
+                "pipeline_artifact",
+                "split_preprocessor",
+                "split_model",
+            } & missing_artifacts:
+                return "missing_pipeline_artifact"
+            return "non_functional_model"
+
+        failure_reason_map = {
+            FailureCategory.IMPORT_FAILURE: (
+                "import_failure_after_requirements_install"
+                if requirements_env_used
+                else "import_failure"
+            ),
+            FailureCategory.INFERENCE_FAILURE: "inference_failure",
+            FailureCategory.REQUIREMENTS_ENV_CREATION_FAILED: "requirements_env_creation_failed",
+            FailureCategory.REQUIREMENTS_INSTALL_FAILED: "requirements_install_failed",
+            FailureCategory.INVALID_PREDICTIONS: "invalid_predictions",
+            FailureCategory.PREDICTION_COUNT_MISMATCH: "prediction_count_mismatch",
+            FailureCategory.EMPTY_PREDICTIONS: "empty_predictions",
+            FailureCategory.LOAD_FAILURE: "non_functional_model",
+            FailureCategory.TIMEOUT: "non_functional_model",
+            FailureCategory.SANDBOX_VIOLATION: "non_functional_model",
+        }
+        return failure_reason_map.get(failure_category)
 
 
 def _default_dataset_manifests() -> dict[str, DatasetManifest]:

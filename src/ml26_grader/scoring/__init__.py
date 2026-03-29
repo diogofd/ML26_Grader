@@ -1,4 +1,4 @@
-from .aggregation import aggregate_submission_scorecard, review_required_from_confidence, summarise_question_result
+from .aggregation import aggregate_submission_scorecard, summarise_question_result
 from .models import (
     QuestionGradingResult,
     QuestionGradingStatus,
@@ -16,6 +16,5 @@ __all__ = [
     "SubmissionScorecard",
     "SubquestionScoreSummary",
     "aggregate_submission_scorecard",
-    "review_required_from_confidence",
     "summarise_question_result",
 ]
