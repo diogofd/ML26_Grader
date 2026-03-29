@@ -1,0 +1,12 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
+
+out/
+sandbox/
+tmp_docx_extract/
+data/SUBMISSIONS_OFFICIAL/

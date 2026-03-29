@@ -1,0 +1,21 @@
+[Q2]
+question_text = """Meridian wants to move beyond reactive complaint management toward a predictive approach that identifies high-risk cases early."""
+
+[Q2.subquestions."Q2.1"]
+text = "Begin by identifying the type of machine learning problem represented in this context."
+max_score_key = "Q2_1_MAX_POINTS"
+
+[Q2.subquestions."Q2.2"]
+text = "Then develop two predictive models capable of estimating whether a complaint will result in an unfavorable outcome. Your analysis must include preprocessing steps, feature engineering, data splitting, and hyperparameter tuning. You must also justify your modeling choices from both a technical and business perspective."
+max_score_key = "Q2_2_MAX_POINTS"
+
+[Q3]
+question_text = "Executives need to understand whether the predictive models are reliable enough for operational use."
+
+[Q3.subquestions."Q3.1"]
+text = "Select the evaluation metric or metrics you consider most appropriate and justify your choice in relation to business risk, regulatory implications, and decision making."
+max_score_key = "Q3_1_MAX_POINTS"
+
+[Q3.subquestions."Q3.2"]
+text = "Compare the performance of the models you developed and determine which one is best suited for deployment. Explain the practical implications of your results."
+max_score_key = "Q3_2_MAX_POINTS"

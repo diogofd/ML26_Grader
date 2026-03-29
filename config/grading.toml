@@ -1,0 +1,54 @@
+# Runtime grader config for Assignment 1.
+# Point values copied from the current assignment brief bundled in the repo.
+
+Q2_1_MAX_POINTS = 1.0
+Q2_2_MAX_POINTS = 3.0
+Q3_1_MAX_POINTS = 2.0
+Q3_2_MAX_POINTS = 2.0
+Q4_MAX_POINTS = 4.0
+
+[public_datasets]
+training = "data/complaints_training.csv"
+test = "data/complaints_test.csv"
+modeltesting = "data/complaints_modeltesting100.csv"
+
+[submission]
+notebook_glob = "*Complaints*Notebook*.ipynb"
+requirements_glob = "*_requirements.txt"
+feature_engineering_glob = "feature_engineering.py"
+combined_pipeline_glob = "*_Pipeline.pkl"
+split_preprocessor_glob = "*_Preprocessor.pkl"
+split_model_glob = "*_Model.pkl"
+
+[q4]
+timeout_seconds = 60
+
+[llm]
+enabled = true
+fail_closed = true
+provider = "openai"
+model = "gpt-5.4-mini"
+api_base_url = "https://api.openai.com/v1"
+api_key_env_var = "OPENAI_API_KEY"
+timeout_seconds = 60
+temperature = 0.0
+max_repair_attempts = 1
+auto_accept_confidence = 8.5
+soft_auto_pass_enabled = true
+soft_auto_pass_min_confidence = 8.0
+soft_auto_pass_min_score_ratio = 0.9
+soft_auto_pass_requires_no_failures = true
+soft_auto_pass_disallowed_reasons = [
+  "warning_heavy_evidence_packet",
+  "narrative_only_evidence_packet",
+  "score_consistency_issue",
+  "evidence_extraction_failed",
+  "empty_evidence_packet",
+  "question_section_not_found",
+  "invalid_rubric_spec",
+  "question_spec_missing",
+  "invalid_judge_request",
+  "judge_unavailable",
+  "judge_evaluation_failed",
+  "invalid_judge_output",
+]

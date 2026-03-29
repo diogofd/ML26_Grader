@@ -1,0 +1,131 @@
+# Placeholder rubric example only.
+# Replace the version markers and any draft content before enabling LLM judging.
+
+[Q2]
+rubric_version = "TODO"
+prompt_version = "TODO"
+
+[Q2.blocks."Q2.1"]
+required_evidence = [
+  "Explicit identification of the machine learning problem type required by the task.",
+  "Clear statement of the target or prediction objective.",
+  "Problem framing that is consistent with the dataset and the business task."
+]
+partial_credit_guidance = [
+  "Award partial credit if the student identifies the task in broadly correct terms but does not articulate the target or objective clearly.",
+  "Award partial credit if the framing is mostly correct but technically imprecise.",
+  "Award low credit if the student gestures at prediction/modeling without clearly identifying the ML task."
+]
+common_failure_modes = [
+  "Confuses the prediction task with a descriptive or purely exploratory task.",
+  "Does not clearly identify the target variable or decision objective.",
+  "Uses vague ML language without committing to a correct formulation."
+]
+score_band_guidance = [
+  "High score: correctly and explicitly formulates the ML task, target, and prediction objective in a way that matches the assignment.",
+  "Mid score: mostly correct formulation but incomplete, imprecise, or weakly tied to the task.",
+  "Low score: unclear, incorrect, or missing ML problem formulation."
+]
+feedback_guidance = [
+  "Comment on whether the ML task was identified explicitly and correctly.",
+  "Comment on whether the target and business objective were made clear.",
+  "If weak, explain whether the issue was incorrect framing, vagueness, or missing target definition."
+]
+
+[Q2.blocks."Q2.2"]
+required_evidence = [
+  "Development of two predictive models.",
+  "Evidence of preprocessing appropriate to the data.",
+  "Evidence of feature engineering or explicit handling of features.",
+  "Use of a sensible train/test split or validation workflow.",
+  "Evidence of hyperparameter tuning or model-selection procedure where expected.",
+  "Technical justification for modeling choices.",
+  "Business-oriented justification for the chosen approach."
+]
+partial_credit_guidance = [
+  "Award substantial partial credit if two models are developed and evaluated, even if tuning or justification is weak.",
+  "Award partial credit if the workflow is technically sound but one required component is thin, such as feature engineering, tuning, or business justification.",
+  "Award lower partial credit if only one model is clearly developed, even if the rest of the workflow is competent."
+]
+common_failure_modes = [
+  "Only one model is clearly implemented.",
+  "Preprocessing is absent, inappropriate, or only implicit.",
+  "Feature engineering is missing or not explained.",
+  "No clear split/validation methodology is shown.",
+  "No meaningful hyperparameter tuning evidence is provided.",
+  "Technical choices are shown in code but not justified.",
+  "Business justification is weak or absent."
+]
+score_band_guidance = [
+  "High score: two models are clearly developed with a coherent end-to-end workflow including preprocessing, features, splitting, tuning, and strong technical/business justification.",
+  "Mid score: two models are present and the workflow is mostly sound, but one or more required elements are underdeveloped or weakly justified.",
+  "Low score: major required workflow elements are missing, unclear, or technically weak."
+]
+feedback_guidance = [
+  "Comment on whether two models were actually developed and compared.",
+  "Comment on the strength of preprocessing, feature engineering, and validation workflow.",
+  "Comment on whether tuning was substantive or superficial.",
+  "Comment on whether the student justified choices technically and in business terms."
+]
+
+[Q3]
+rubric_version = "TODO"
+prompt_version = "TODO"
+
+[Q3.blocks."Q3.1"]
+required_evidence = [
+  "Selection of evaluation metric(s) appropriate to the task.",
+  "Explicit justification of metric choice.",
+  "Connection between metric choice and business risk, decision costs, or operational consequences.",
+  "Where relevant, connection to regulatory, fairness, compliance, or other non-technical constraints mentioned in the brief."
+]
+partial_credit_guidance = [
+  "Award partial credit if appropriate metrics are named but justification is thin.",
+  "Award partial credit if the student discusses business risk but does not connect it clearly to the chosen metric.",
+  "Award low credit if metrics are listed mechanically with little or no rationale."
+]
+common_failure_modes = [
+  "Chooses metrics without justification.",
+  "Relies only on generic accuracy-style discussion when the problem calls for more nuanced reasoning.",
+  "Fails to connect the metric choice to business risk or decision consequences.",
+  "Mentions regulatory or operational constraints only superficially."
+]
+score_band_guidance = [
+  "High score: metric choice is well justified and clearly tied to business risk, decision-making, and relevant non-technical constraints.",
+  "Mid score: metrics are reasonable but the justification is incomplete, generic, or only partially tied to the business context.",
+  "Low score: metric selection is weak, unjustified, or mismatched to the problem."
+]
+feedback_guidance = [
+  "Comment on whether the chosen metrics fit the modeling objective.",
+  "Comment on whether the student explained trade-offs such as false positives vs false negatives or other relevant risks.",
+  "If weak, explain whether the gap was technical, business-related, or both."
+]
+
+[Q3.blocks."Q3.2"]
+required_evidence = [
+  "Comparison of the developed models using relevant evidence.",
+  "Recommendation of one model for deployment.",
+  "Justification for the deployment recommendation.",
+  "Discussion of practical implications of deploying the recommended model."
+]
+partial_credit_guidance = [
+  "Award partial credit if models are compared but the final recommendation is weak or under-argued.",
+  "Award partial credit if a model is recommended but the comparison is mostly descriptive rather than evaluative.",
+  "Award lower partial credit if deployment is mentioned but practical implications are not addressed."
+]
+common_failure_modes = [
+  "Compares models only superficially.",
+  "Makes a recommendation without tying it to evidence.",
+  "Fails to discuss deployment implications or trade-offs.",
+  "Treats the best raw metric as automatically decisive without broader reasoning."
+]
+score_band_guidance = [
+  "High score: models are compared thoughtfully, one is recommended for deployment, and the recommendation is well justified with practical implications considered.",
+  "Mid score: comparison and recommendation are present but somewhat shallow, incomplete, or weakly tied to deployment reality.",
+  "Low score: weak or missing comparison, recommendation, or deployment reasoning."
+]
+feedback_guidance = [
+  "Comment on the quality of the comparison between models.",
+  "Comment on whether the final recommendation is supported by evidence rather than assertion.",
+  "Comment on whether deployment implications, trade-offs, or operational considerations were addressed."
+]

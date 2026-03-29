@@ -1,0 +1,12 @@
+# .codex/config.toml
+
+project_root_markers = [".git"]
+
+[tools]
+# Leave room for future MCP/tool config if needed.
+
+[profiles.default]
+model_reasoning_effort = "medium"
+
+[instructions]
+# Keep repo behavior driven mainly by AGENTS.md and spec docs.
